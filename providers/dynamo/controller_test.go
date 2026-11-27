@@ -1462,3 +1462,126 @@ func TestDynamoProviderPredicateRejectsOtherProviderInSpecAndStatus(t *testing.T
 		t.Error("expected ModelDeployment with provider=kuberay in both spec and status to be rejected")
 	}
 }
+
+// dgdVolumeMounts returns the volumeMount maps of every DGD service, in place.
+func dgdVolumeMounts(u *unstructured.Unstructured) []map[string]any {
+	spec, _ := u.Object["spec"].(map[string]any)
+	services, _ := spec["services"].(map[string]any)
+	var out []map[string]any
+	for _, s := range services {
+		svc, _ := s.(map[string]any)
+		vms, _ := svc["volumeMounts"].([]any)
+		for _, m := range vms {
+			if mount, ok := m.(map[string]any); ok {
+				out = append(out, mount)
+			}
+		}
+	}
+	return out
+}
+
+// crdDefaultingClient returns a fake client that mimics the Dynamo CRD default
+// useAsCompilationCache=false on every volumeMount of a DGD write, and counts
+// DGD updates.
+func crdDefaultingClient(scheme *runtime.Scheme, updates *int, objs ...client.Object) client.Client {
+	applyDefault := func(obj client.Object) {
+		u, ok := obj.(*unstructured.Unstructured)
+		if !ok || u.GetKind() != DynamoGraphDeploymentKind {
+			return
+		}
+		for _, mount := range dgdVolumeMounts(u) {
+			if _, set := mount["useAsCompilationCache"]; !set {
+				mount["useAsCompilationCache"] = false
+			}
+		}
+	}
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objs...).
+		WithStatusSubresource(&airunwayv1alpha1.ModelDeployment{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				applyDefault(obj)
+				return c.Create(ctx, obj, opts...)
+			},
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == DynamoGraphDeploymentKind {
+					*updates++
+				}
+				applyDefault(obj)
+				return c.Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+}
+
+func TestReconcileStorageBackedDGDDoesNotDriftAfterCRDDefaulting(t *testing.T) {
+	tests := []struct {
+		name          string
+		disaggregated bool
+	}{
+		{name: "aggregated"},
+		{name: "disaggregated", disaggregated: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertStorageBackedDGDDoesNotDrift(t, tt.disaggregated)
+		})
+	}
+}
+
+// assertStorageBackedDGDDoesNotDrift reconciles a storage-backed MD twice and
+// checks that the second, unchanged reconcile does not update the DGD.
+func assertStorageBackedDGDDoesNotDrift(t *testing.T, disaggregated bool) {
+	t.Helper()
+	scheme := newScheme()
+	md := newMDWithStorage("test", "default")
+	controllerutil.AddFinalizer(md, FinalizerName)
+	if disaggregated {
+		md.Spec.Serving = &airunwayv1alpha1.ServingSpec{Mode: airunwayv1alpha1.ServingModeDisaggregated}
+		md.Spec.Scaling = &airunwayv1alpha1.ScalingSpec{
+			Prefill: &airunwayv1alpha1.ComponentScalingSpec{Replicas: 1, GPU: &airunwayv1alpha1.GPUSpec{Count: 1}},
+			Decode:  &airunwayv1alpha1.ComponentScalingSpec{Replicas: 1, GPU: &airunwayv1alpha1.GPUSpec{Count: 1}},
+		}
+	}
+	owner := []metav1.OwnerReference{{APIVersion: "airunway.ai/v1alpha1", Kind: "ModelDeployment", Name: "test", UID: "test-uid"}}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-model-cache", Namespace: "default", OwnerReferences: owner},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-model-download", Namespace: "default", OwnerReferences: owner},
+		Status:     batchv1.JobStatus{Succeeded: 1},
+	}
+
+	var updates int
+	c := crdDefaultingClient(scheme, &updates, md, pvc, job)
+	r := NewDynamoProviderReconciler(c, scheme, "")
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test", Namespace: "default"}}
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	dgd := &unstructured.Unstructured{}
+	setDGDGVK(dgd)
+	if err := c.Get(context.Background(), req.NamespacedName, dgd); err != nil {
+		t.Fatalf("expected DGD after first reconcile: %v", err)
+	}
+	mounts := dgdVolumeMounts(dgd)
+	if len(mounts) == 0 {
+		t.Fatal("expected storage volumeMounts on the DGD")
+	}
+	for _, m := range mounts {
+		if v, ok := m["useAsCompilationCache"].(bool); !ok || v {
+			t.Fatalf("model mount useAsCompilationCache = %v, want false", m["useAsCompilationCache"])
+		}
+	}
+
+	updates = 0
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if updates != 0 {
+		t.Errorf("unchanged reconcile updated the DGD %d times, want 0", updates)
+	}
+}
