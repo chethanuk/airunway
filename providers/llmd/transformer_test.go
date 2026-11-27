@@ -2,6 +2,7 @@ package llmd
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1111,5 +1112,88 @@ func assertHTTPProbe(t *testing.T, container map[string]any, name string, initia
 	}
 	if httpGet["port"] != DefaultVLLMPort {
 		t.Errorf("expected %s port %d, got %v", name, DefaultVLLMPort, httpGet["port"])
+	}
+}
+
+func TestTransformGPUDeploymentsRolloutStrategy(t *testing.T) {
+	const strategyType = "type"
+	gpuStrategy := map[string]any{
+		strategyType:    "RollingUpdate",
+		"rollingUpdate": map[string]any{"maxSurge": int64(0), "maxUnavailable": int64(1)},
+	}
+	withOverrides := func(raw string) *airunwayv1alpha1.ModelDeployment {
+		md := newTestMD("m", "default")
+		md.Spec.Provider = &airunwayv1alpha1.ProviderSpec{Overrides: &runtime.RawExtension{Raw: []byte(raw)}}
+		return md
+	}
+	cpuOnly := newTestMD("m", "default")
+	cpuOnly.Spec.Resources = nil
+	zeroGPU := newTestMD("m", "default")
+	zeroGPU.Spec.Resources = &airunwayv1alpha1.ResourceSpec{GPU: &airunwayv1alpha1.GPUSpec{Count: 0}}
+
+	// want maps Deployment name to its expected spec.strategy; nil means none rendered.
+	tests := []struct {
+		name string
+		md   *airunwayv1alpha1.ModelDeployment
+		want map[string]map[string]any
+	}{
+		{"aggregated GPU", newTestMD("m", "default"), map[string]map[string]any{"m": gpuStrategy}},
+		{"disaggregated GPU prefill and decode", rolloutDisaggMD(1, 4), map[string]map[string]any{"m-prefill": gpuStrategy, "m-decode": gpuStrategy}},
+		{"disaggregated GPU prefill only", rolloutDisaggMD(2, 0), map[string]map[string]any{"m-prefill": gpuStrategy, "m-decode": nil}},
+		{"no resources", cpuOnly, map[string]map[string]any{"m": nil}},
+		{"zero GPUs", zeroGPU, map[string]map[string]any{"m": nil}},
+		{
+			"partial override replaces the default",
+			withOverrides(`{"spec": {"strategy": {"rollingUpdate": {"maxSurge": 1}}}}`),
+			map[string]map[string]any{"m": {"rollingUpdate": map[string]any{"maxSurge": float64(1)}}},
+		},
+		{
+			"Recreate override is not mixed with rollingUpdate",
+			withOverrides(`{"spec": {"strategy": {"type": "Recreate"}}}`),
+			map[string]map[string]any{"m": {strategyType: "Recreate"}},
+		},
+		{
+			"unrelated override keeps the GPU default",
+			withOverrides(`{"spec": {"minReadySeconds": 5}}`),
+			map[string]map[string]any{"m": gpuStrategy},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resources, err := NewTransformer().Transform(context.Background(), tt.md)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			assertDeploymentStrategies(t, resources, tt.want)
+		})
+	}
+}
+
+func rolloutDisaggMD(prefillGPU, decodeGPU int32) *airunwayv1alpha1.ModelDeployment {
+	md := newTestMD("m", "default")
+	md.Spec.Resources = nil
+	md.Spec.Serving = &airunwayv1alpha1.ServingSpec{Mode: airunwayv1alpha1.ServingModeDisaggregated}
+	md.Spec.Scaling = &airunwayv1alpha1.ScalingSpec{
+		Prefill: &airunwayv1alpha1.ComponentScalingSpec{Replicas: 1, GPU: &airunwayv1alpha1.GPUSpec{Count: prefillGPU}},
+		Decode:  &airunwayv1alpha1.ComponentScalingSpec{Replicas: 1, GPU: &airunwayv1alpha1.GPUSpec{Count: decodeGPU}},
+	}
+	return md
+}
+
+func assertDeploymentStrategies(t *testing.T, resources []*unstructured.Unstructured, want map[string]map[string]any) {
+	t.Helper()
+	got := map[string]map[string]any{}
+	for _, r := range resources {
+		if r.GetKind() != "Deployment" {
+			continue
+		}
+		strategy, _, err := unstructured.NestedMap(r.Object, "spec", "strategy")
+		if err != nil {
+			t.Fatalf("%s: reading spec.strategy: %v", r.GetName(), err)
+		}
+		got[r.GetName()] = strategy
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Deployment strategies:\n got  %v\n want %v", got, want)
 	}
 }
