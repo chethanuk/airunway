@@ -106,9 +106,14 @@ sed -i.bak -E 's|^var VLLMVersion = "[^"]*"$|var VLLMVersion = "0.0.0-bogus"|' "
 expect_fail "${VLLM_TRANSFORMER}"
 mv -f "${VLLM_TRANSFORMER}.bak" "${VLLM_TRANSFORMER}"
 
-echo "== Mutating ${LLMD_CONFIG} =="
-sed -i.bak -E 's|^var LLMDSchedulerImage = "[^"]*"$|var LLMDSchedulerImage = "ghcr.io/llm-d/llm-d-inference-scheduler:v0.0.0-bogus"|' "${LLMD_CONFIG}"
-expect_fail "${LLMD_CONFIG}"
+echo "== Mutating ${LLMD_CONFIG} (tag only) =="
+sed -i.bak -E 's|^(var LLMDSchedulerImage = "[^"]*):v[^@"]*@|\1:v0.0.0-bogus@|' "${LLMD_CONFIG}"
+expect_fail "${LLMD_CONFIG} tag only"
+mv -f "${LLMD_CONFIG}.bak" "${LLMD_CONFIG}"
+
+echo "== Mutating ${LLMD_CONFIG} (digest only) =="
+sed -i.bak -E 's|@sha256:[0-9a-f]{64}"$|@sha256:0000000000000000000000000000000000000000000000000000000000000000"|' "${LLMD_CONFIG}"
+expect_fail "${LLMD_CONFIG} digest only"
 mv -f "${LLMD_CONFIG}.bak" "${LLMD_CONFIG}"
 
 for dockerfile in "${AGENT_DOCKERFILES[@]}"; do

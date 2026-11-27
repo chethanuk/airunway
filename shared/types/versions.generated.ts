@@ -5,7 +5,8 @@
 export const GAIE_VERSION = "v1.5.0";
 export const DYNAMO_VERSION = "1.1.1";
 export const KAITO_VERSION = "0.10.0";
-export const LLMD_VERSION = "0.6.0";
+export const LLMD_VERSION = "0.11.0";
+export const LLMD_EPP_DIGEST = "sha256:39257d24552d16d8f215d3de25cc734fd44af3b282b67032db01aff900c610cf";
 export const VLLM_VERSION = "cu130-nightly";
 export const GATEWAY_API_VERSION = "v1.5.1";
 export const ISTIO_VERSION = "1.30.0";

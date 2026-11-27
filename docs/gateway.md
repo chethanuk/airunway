@@ -398,7 +398,7 @@ spec:
       - name: vllm
         gateway:
           endpointPicker:
-            image: ghcr.io/llm-d/llm-d-inference-scheduler:v0.6.0
+            image: ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.11.0@sha256:39257d24552d16d8f215d3de25cc734fd44af3b282b67032db01aff900c610cf
             configData: |
               apiVersion: inference.networking.x-k8s.io/v1alpha1
               kind: EndpointPickerConfig
