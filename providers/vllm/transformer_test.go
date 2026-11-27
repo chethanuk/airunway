@@ -1451,3 +1451,115 @@ func TestTransformMountsModelStorageVolumes(t *testing.T) {
 		t.Errorf("expected claimName shared-model-cache, got %v", pvc["claimName"])
 	}
 }
+
+func TestTransformAggregatedRolloutStrategy(t *testing.T) {
+	const rollingUpdate = "RollingUpdate"
+	oneGPU := &airunwayv1alpha1.ResourceSpec{GPU: &airunwayv1alpha1.GPUSpec{Count: 1}}
+
+	tests := []struct {
+		name           string
+		resources      *airunwayv1alpha1.ResourceSpec
+		overrides      string
+		wantType       string
+		wantSurge      any
+		wantUnavail    any
+		wantNoStrategy bool
+		wantNoRolling  bool
+	}{
+		{name: "one GPU never surges", resources: oneGPU, wantType: rollingUpdate, wantSurge: int64(0), wantUnavail: int64(1)},
+		{name: "multi GPU never surges", resources: &airunwayv1alpha1.ResourceSpec{GPU: &airunwayv1alpha1.GPUSpec{Count: 4}}, wantType: rollingUpdate, wantSurge: int64(0), wantUnavail: int64(1)},
+		{name: "no resources keeps the default strategy", wantNoStrategy: true},
+		{name: "resources without GPU keep the default strategy", resources: &airunwayv1alpha1.ResourceSpec{Memory: "8Gi"}, wantNoStrategy: true},
+		{name: "zero downtime override is used as given", resources: oneGPU, overrides: `{"spec": {"strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0}}}}`, wantType: rollingUpdate, wantSurge: float64(1), wantUnavail: float64(0)},
+		{name: "partial override does not merge with the default", resources: oneGPU, overrides: `{"spec": {"strategy": {"rollingUpdate": {"maxUnavailable": 0}}}}`, wantSurge: nil, wantUnavail: float64(0)},
+		{name: "unrelated override keeps the GPU default", resources: oneGPU, overrides: `{"spec": {"minReadySeconds": 10}}`, wantType: rollingUpdate, wantSurge: int64(0), wantUnavail: int64(1)},
+		{name: "Recreate override has no rollingUpdate", resources: oneGPU, overrides: `{"spec": {"strategy": {"type": "Recreate"}}}`, wantType: "Recreate", wantNoRolling: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resources, err := NewTransformer().Transform(context.Background(), rolloutTestMD(tt.resources, tt.overrides))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			strategy, found := deploymentStrategy(t, resources[0])
+			switch {
+			case tt.wantNoStrategy:
+				if found {
+					t.Fatalf("expected no strategy, got %v", strategy)
+				}
+			case !found:
+				t.Fatal("expected spec.strategy to be set")
+			case tt.wantNoRolling:
+				if strategy["type"] != tt.wantType {
+					t.Errorf("strategy type = %v, want %v", strategy["type"], tt.wantType)
+				}
+				if _, ok := strategy["rollingUpdate"]; ok {
+					t.Errorf("expected no rollingUpdate with %v, got %v", tt.wantType, strategy["rollingUpdate"])
+				}
+			default:
+				assertRolloutStrategy(t, strategy, tt.wantType, tt.wantSurge, tt.wantUnavail)
+			}
+		})
+	}
+}
+
+func TestTransformDisaggregatedRolloutStrategy(t *testing.T) {
+	md := newTestMD("test-model", "default")
+	md.Spec.Serving = &airunwayv1alpha1.ServingSpec{Mode: airunwayv1alpha1.ServingModeDisaggregated}
+	md.Spec.Scaling = &airunwayv1alpha1.ScalingSpec{
+		Prefill: &airunwayv1alpha1.ComponentScalingSpec{Replicas: 2, GPU: &airunwayv1alpha1.GPUSpec{Count: 1}},
+		Decode:  &airunwayv1alpha1.ComponentScalingSpec{Replicas: 1, GPU: &airunwayv1alpha1.GPUSpec{Count: 2}},
+	}
+	resources, err := NewTransformer().Transform(context.Background(), md)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resources) != 4 {
+		t.Fatalf("expected 4 resources, got %d", len(resources))
+	}
+	for _, d := range resources[:2] {
+		strategy, found := deploymentStrategy(t, d)
+		if !found {
+			t.Fatalf("%s: expected spec.strategy to be set", d.GetName())
+		}
+		assertRolloutStrategy(t, strategy, "RollingUpdate", int64(0), int64(1))
+	}
+}
+
+func rolloutTestMD(resources *airunwayv1alpha1.ResourceSpec, overrides string) *airunwayv1alpha1.ModelDeployment {
+	md := newTestMD("test-model", "default")
+	md.Spec.Resources = resources
+	if overrides != "" {
+		md.Spec.Provider = &airunwayv1alpha1.ProviderSpec{Overrides: &runtime.RawExtension{Raw: []byte(overrides)}}
+	}
+	return md
+}
+
+func deploymentStrategy(t *testing.T, obj *unstructured.Unstructured) (map[string]any, bool) {
+	t.Helper()
+	if obj.GetKind() != "Deployment" {
+		t.Fatalf("expected a Deployment, got %s", obj.GetKind())
+	}
+	strategy, found, err := unstructured.NestedMap(obj.Object, "spec", "strategy")
+	if err != nil {
+		t.Fatalf("reading spec.strategy: %v", err)
+	}
+	return strategy, found
+}
+
+func assertRolloutStrategy(t *testing.T, strategy map[string]any, wantType string, wantSurge, wantUnavail any) {
+	t.Helper()
+	if wantType != "" && strategy["type"] != wantType {
+		t.Errorf("strategy type = %v, want %v", strategy["type"], wantType)
+	}
+	ru, ok := strategy["rollingUpdate"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected rollingUpdate map, got %T", strategy["rollingUpdate"])
+	}
+	if ru["maxSurge"] != wantSurge {
+		t.Errorf("maxSurge = %v (%T), want %v", ru["maxSurge"], ru["maxSurge"], wantSurge)
+	}
+	if ru["maxUnavailable"] != wantUnavail {
+		t.Errorf("maxUnavailable = %v (%T), want %v", ru["maxUnavailable"], ru["maxUnavailable"], wantUnavail)
+	}
+}
