@@ -123,6 +123,17 @@ For HuggingFace GGUF models, KAITO uses in-cluster image building:
 - **BuildKitService** (`backend/src/services/buildkit.ts`): Manages BuildKit builder
 - **AikitService** (`backend/src/services/aikit.ts`): Handles GGUF image building
 
+### llm-d GPU Rollouts
+
+llm-d Deployments that request GPUs, including prefill and decode in disaggregated mode, use
+`RollingUpdate` with `maxSurge: 0` and `maxUnavailable: 1`. The Kubernetes default (25% surge)
+starts the new pod before the old one stops, and on a node with no spare GPU that pod stays
+Pending and the rollout never finishes. Replacing pods old-first avoids that, but a Deployment
+with one replica is unavailable while its new pod starts and loads the model. To keep surge
+when you have spare GPU capacity, set `spec.strategy` in `spec.provider.overrides`. A strategy
+override replaces the default as a whole, so `{"spec": {"strategy": {"type": "Recreate"}}}` also
+works. CPU-only Deployments keep the Kubernetes default.
+
 ---
 
 ## Upstream Compatibility
