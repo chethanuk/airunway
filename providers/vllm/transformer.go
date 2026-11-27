@@ -283,6 +283,9 @@ func (t *Transformer) buildDeployment(md *airunwayv1alpha1.ModelDeployment, name
 			"spec": podSpec,
 		},
 	}
+	if requiresGPU(resources) && !overridesStrategy(md) {
+		spec["strategy"] = gpuRolloutStrategy()
+	}
 
 	if err := unstructured.SetNestedField(d.Object, spec, "spec"); err != nil {
 		return nil, fmt.Errorf("failed to set deployment spec: %w", err)
@@ -589,6 +592,43 @@ func buildHTTPProbe(initialDelaySeconds, periodSeconds, failureThreshold int64) 
 
 func requiresSharedMemoryVolume(resources *airunwayv1alpha1.ResourceSpec) bool {
 	return resources != nil && resources.GPU != nil && resources.GPU.Count > 1
+}
+
+func requiresGPU(resources *airunwayv1alpha1.ResourceSpec) bool {
+	return resources != nil && resources.GPU != nil && resources.GPU.Count > 0
+}
+
+// gpuRolloutStrategy replaces the old pod before starting the new one. The
+// default 25% maxSurge rounds up to one extra pod, which needs a spare GPU and
+// leaves the rollout Pending on a fully used node. With one replica this means
+// an outage on every rollout.
+func gpuRolloutStrategy() map[string]any {
+	return map[string]any{
+		"type": "RollingUpdate",
+		"rollingUpdate": map[string]any{
+			"maxSurge":       int64(0),
+			"maxUnavailable": int64(1),
+		},
+	}
+}
+
+// overridesStrategy reports whether the provider overrides set spec.strategy.
+// Overrides are deep-merged, so a partial one such as type Recreate, or
+// maxUnavailable 0 alone, merged onto the injected default would be rejected by
+// the API server. The user's strategy is used as given instead.
+func overridesStrategy(md *airunwayv1alpha1.ModelDeployment) bool {
+	if md.Spec.Provider == nil || md.Spec.Provider.Overrides == nil {
+		return false
+	}
+	var overrides struct {
+		Spec struct {
+			Strategy json.RawMessage `json:"strategy"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(md.Spec.Provider.Overrides.Raw, &overrides); err != nil {
+		return false // applyOverrides reports the error
+	}
+	return overrides.Spec.Strategy != nil
 }
 
 func buildSharedMemoryVolumeMount() map[string]interface{} {
