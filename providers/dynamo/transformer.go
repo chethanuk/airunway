@@ -983,20 +983,20 @@ func (t *Transformer) buildPVCs(md *airunwayv1alpha1.ModelDeployment) []interfac
 }
 
 // buildVolumeMounts creates the volumeMounts list for a DGD worker service.
-// Each volume maps to {name: claimName, mountPoint: mountPath} with optional
-// useAsCompilationCache: true for compilationCache purpose.
+// Each volume maps to {name: claimName, mountPoint: mountPath,
+// useAsCompilationCache: purpose == compilationCache}.
 func (t *Transformer) buildVolumeMounts(md *airunwayv1alpha1.ModelDeployment) []interface{} {
 	if md.Spec.Model.Storage == nil {
 		return nil
 	}
 	var mounts []interface{}
 	for _, vol := range md.Spec.Model.Storage.Volumes {
+		// Always set useAsCompilationCache: the DGD CRD defaults it to false,
+		// so omitting it makes every reconcile see drift and update the DGD.
 		mount := map[string]interface{}{
-			"name":       vol.ResolvedClaimName(md.Name),
-			"mountPoint": vol.MountPath,
-		}
-		if vol.Purpose == airunwayv1alpha1.VolumePurposeCompilationCache {
-			mount["useAsCompilationCache"] = true
+			"name":                  vol.ResolvedClaimName(md.Name),
+			"mountPoint":            vol.MountPath,
+			"useAsCompilationCache": vol.Purpose == airunwayv1alpha1.VolumePurposeCompilationCache,
 		}
 		if vol.ReadOnly {
 			mount["readOnly"] = true

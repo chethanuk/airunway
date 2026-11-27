@@ -1585,15 +1585,15 @@ func TestTransformWithBothCaches(t *testing.T) {
 		t.Fatalf("expected 2 volumeMounts, got %d", len(volumeMounts))
 	}
 
-	// Verify one has useAsCompilationCache and the other doesn't
+	// Verify only the compile cache has useAsCompilationCache=true
 	foundModel := false
 	foundCompile := false
 	for _, vm := range volumeMounts {
 		m, _ := vm.(map[string]interface{})
 		if m["name"] == "model-pvc" && m["mountPoint"] == "/model-cache" {
 			foundModel = true
-			if _, hasKey := m["useAsCompilationCache"]; hasKey {
-				t.Error("model-pvc should not have useAsCompilationCache")
+			if v, hasKey := m["useAsCompilationCache"]; !hasKey || v != false {
+				t.Errorf("model-pvc should have useAsCompilationCache=false, got %v", v)
 			}
 		}
 		if m["name"] == "compile-pvc" && m["mountPoint"] == "/compilation-cache" {
