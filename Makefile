@@ -374,9 +374,11 @@ verify-versions:
 	@# 6. providers/vllm/transformer.go fallback literal must match VLLM_VERSION
 	@grep -qE '^var VLLMVersion = "$(VLLM_VERSION_RE)"$$' providers/vllm/transformer.go || \
 	  { echo "❌ providers/vllm/transformer.go VLLMVersion fallback != $(VLLM_VERSION) (from versions.env)"; exit 1; }
-	@# 7. providers/llmd/config.go fallback literal must match LLMD_VERSION
-	@grep -qE '^var LLMDSchedulerImage = "ghcr\.io/llm-d/llm-d-inference-scheduler:v$(LLMD_VERSION_RE)"$$' providers/llmd/config.go || \
-	  { echo "❌ providers/llmd/config.go LLMDSchedulerImage tag != $(LLMD_VERSION) (from versions.env)"; exit 1; }
+	@# 7. providers/llmd/config.go fallback literal must match LLMD_VERSION and LLMD_EPP_DIGEST
+	@grep -qE '^var LLMDSchedulerImage = "ghcr\.io/llm-d/llm-d-router-endpoint-picker:v$(LLMD_VERSION_RE)@$(LLMD_EPP_DIGEST)"$$' providers/llmd/config.go || \
+	  { echo "❌ providers/llmd/config.go LLMDSchedulerImage != v$(LLMD_VERSION)@$(LLMD_EPP_DIGEST) (from versions.env)"; exit 1; }
+	@printf '%s\n' "$(LLMD_EPP_DIGEST)" | grep -qE '^sha256:[0-9a-f]{64}$$' || \
+	  { echo "❌ versions.env LLMD_EPP_DIGEST=$(LLMD_EPP_DIGEST) is not a sha256:<64 hex> digest"; exit 1; }
 	@# 8. Agent image bases must remain immutable digest references.
 	@for assignment in \
 	  "AGENT_PYTHON_BASE=$(AGENT_PYTHON_BASE)" \

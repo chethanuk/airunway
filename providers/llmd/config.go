@@ -61,13 +61,15 @@ schedulingProfiles:
 `
 )
 
-// LLMDSchedulerImage is the llm-d Inference Scheduler image used as the
-// EPP for all llm-d ModelDeployments.
+// LLMDSchedulerImage is the llm-d Router Endpoint Picker image used as the
+// EPP for all llm-d ModelDeployments, pinned by tag and digest.
 //
 // Source of truth: /versions.env at the repo root.
 // (see providers/llmd/Makefile). The string literal below is a fallback for
 // `go run` / `go test` invocations that bypass the Makefile.
-var LLMDSchedulerImage = "ghcr.io/llm-d/llm-d-inference-scheduler:v0.6.0"
+//
+//nolint:lll // a tag@digest image reference cannot be wrapped
+var LLMDSchedulerImage = "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.11.0@sha256:39257d24552d16d8f215d3de25cc734fd44af3b282b67032db01aff900c610cf"
 
 // shimVersion is this shim's reported version tag, injected at build time via:
 //

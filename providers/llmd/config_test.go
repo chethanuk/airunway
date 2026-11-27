@@ -3,6 +3,7 @@ package llmd
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -248,5 +249,14 @@ func assertAPIFormats(t *testing.T, engine string, got, expected []airunwayv1alp
 		if !found {
 			t.Errorf("expected %s to support API format %s", engine, e)
 		}
+	}
+}
+
+// The default EPP image must come from the public endpoint-picker repo,
+// pinned by tag and digest.
+func TestLLMDSchedulerImageIsPublicEndpointPickerPinnedByDigest(t *testing.T) {
+	want := regexp.MustCompile(`^ghcr\.io/llm-d/llm-d-router-endpoint-picker:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$`)
+	if !want.MatchString(LLMDSchedulerImage) {
+		t.Errorf("LLMDSchedulerImage = %q, want it to match %s", LLMDSchedulerImage, want)
 	}
 }

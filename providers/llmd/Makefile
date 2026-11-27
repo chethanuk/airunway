@@ -30,7 +30,7 @@ SHIM_VERSION ?= dev-$(GIT_SHA)$(GIT_DIRTY)
 # reported shim version (tracking the release tag) into the provider binary.
 # The Go fallbacks in config.go only apply when bypassing this Makefile (e.g.
 # `go run`, `go test`).
-LDFLAGS := -X $(MODULE).LLMDSchedulerImage=ghcr.io/llm-d/llm-d-inference-scheduler:v$(LLMD_VERSION)
+LDFLAGS := -X $(MODULE).LLMDSchedulerImage=ghcr.io/llm-d/llm-d-router-endpoint-picker:v$(LLMD_VERSION)@$(LLMD_EPP_DIGEST)
 LDFLAGS += -X $(MODULE).shimVersion=$(SHIM_VERSION)
 
 GOLANGCI_LINT ?= ../../bin/golangci-lint
@@ -94,7 +94,7 @@ build: verify-versions vet
 
 ## Build provider Docker image
 docker-build: verify-versions
-	docker buildx build --platform $(PLATFORM) $(IMAGE_OUTPUT_FLAG) --build-arg LLMD_VERSION=$(LLMD_VERSION) --build-arg SHIM_VERSION=$(SHIM_VERSION) -f Dockerfile -t $(IMG) ../..
+	docker buildx build --platform $(PLATFORM) $(IMAGE_OUTPUT_FLAG) --build-arg LLMD_VERSION=$(LLMD_VERSION) --build-arg LLMD_EPP_DIGEST=$(LLMD_EPP_DIGEST) --build-arg SHIM_VERSION=$(SHIM_VERSION) -f Dockerfile -t $(IMG) ../..
 	@echo "✅ llm-d provider image built: $(IMG) ($(PLATFORM), $(if $(PUSH_ENABLED),pushed,loaded locally))"
 
 ## Deploy provider to the K8s cluster
